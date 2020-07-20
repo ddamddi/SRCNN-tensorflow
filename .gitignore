@@ -132,3 +132,7 @@ dmypy.json
 /checkpoint
 /logs
 *.h5
+/result
+bicubic.py
+inferred
+tmp
