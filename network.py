@@ -4,45 +4,45 @@ import time
 
 class SRCNN:
     def __init__(self, sess, args):
-        self.model_name = "SRCNN_m"
+        self.model_name = "SRCNN"
+        self.train_dataset = 'T91'
         self.sess = sess
 
-        self.pixel_max = 1.
-        self.pixel_min = 0.
-        self.scale = args.scale
-        self.img_c = len(args.channel)
-
-        self.depth = args.depth
-        self.kernel_size = args.kernel_size
-        self.filter_size = args.filter_size
-        self.filter_size.append(self.img_c)
+        self.checkpoint_dir = args.checkpoint_dir
+        self.log_dir = args.log_dir
+        self.infer_dir = args.infer_dir
 
         self.epoch = args.epoch
         self.batch_size = args.batch_size
         self.initial_lr = args.lr
         self.momentum = args.momentum
-
         self.val_interval = args.val_interval
-        self.checkpoint_dir = args.checkpoint_dir
-        self.log_dir = args.log_dir
 
-
-        ''' Load T91 Dataset for Training '''
-        self.train_dataset = 'T91'
+        self.pixel_max = 1.
+        self.pixel_min = 0.
         self.patch_size = 33
         self.stride = 14
-        self.train_HR, self.train_LR = load_T91(scale=self.scale)
+        self.scale = args.scale
+        self.img_c = 1
+        
+        self.depth = args.depth
+        self.kernel_size = args.kernel_size
+        self.filter_size = args.filter_size
+        self.filter_size.append(self.img_c)
+        
+        if args.phase == 'train':
+            ''' Load T91 Dataset for Training '''
+            self.train_HR, self.train_LR = load_T91(scale=self.scale)
 
-        ''' Load Datasets for Testing (Set5)'''
-        self.test_HR, self.test_LR = load_set5(scale=self.scale)
-        self.test_HR, self.test_LR = create_sub_patches((self.test_HR, self.test_LR))
+            ''' Load Datasets for Validation (Set5)'''
+            self.test_HR, self.test_LR = load_set5(scale=self.scale)
+            self.test_HR, self.test_LR = preprocessing((self.test_HR, self.test_LR))
 
-
-        print("---------\nDatasets\n---------")
-        print("TRAIN LABEL : ", str(np.array(self.train_HR).shape))
-        print("TRAIN INPUT : ", str(np.array(self.train_LR).shape))
-        print("TEST LABEL  : ", str(np.array(self.test_HR).shape))
-        print("TEST INPUT  : ", str(np.array(self.test_LR).shape))
+            print("---------\nDatasets\n---------")
+            print("TRAIN LABEL : ", str(np.array(self.train_HR).shape))
+            print("TRAIN INPUT : ", str(np.array(self.train_LR).shape))
+            print("TEST LABEL  : ", str(np.array(self.test_HR).shape))
+            print("TEST INPUT  : ", str(np.array(self.test_LR).shape))
 
     def network(self, x, reuse=False):
         with tf.variable_scope("SRCNN", reuse=reuse):
@@ -72,6 +72,7 @@ class SRCNN:
         """ Model """
         self.train_logits = self.network(self.train_Y)
         self.test_logits  = tf.clip_by_value(self.network(self.test_Y, reuse=True), self.pixel_min, self.pixel_max)
+        # self.test_logits = self.network(self.test_Y, reuse=True)
 
         self.train_loss = tf.reduce_mean(tf.square(self.train_logits - self.train_X))
         self.test_loss  = tf.reduce_mean(tf.square(self.test_logits - self.test_X))
@@ -179,8 +180,7 @@ class SRCNN:
         else:
             print(" [!] Load failed...")
         
-        test_datasets = ['Set5', 'Set14', 'BSDS200']
-        # test_datasets = ['Set14']
+        test_datasets = ['Set5', 'Set14', 'BSDS200', 'Urban100']
 
         ''' TEST DATA LOAD '''
         for dataset in test_datasets:
@@ -190,10 +190,10 @@ class SRCNN:
                 self.test_HR, self.test_LR = load_set14(scale=self.scale)
             if dataset == 'BSDS200':
                 self.test_HR, self.test_LR = load_bsds200(scale=self.scale)
-
-            self.test_HR, self.test_LR = create_sub_patches((self.test_HR, self.test_LR))
-            # self.test_HR_cbcr, self.test_LR_cbcr = load_set14(scale=2, color_space='YCbCr')
-            # print(self.test_HR_cbcr.shape)
+            if dataset == 'Urban100':
+                self.test_HR, self.test_LR = load_urban100(scale=self.scale)
+            
+            self.test_HR, self.test_LR = preprocessing((self.test_HR, self.test_LR))
 
             test_loss_mean = 0.
             test_psnr_mean = 0.
@@ -208,9 +208,6 @@ class SRCNN:
 
                 HR = self.test_HR[idx][:h,:w]
                 LR = self.test_LR[idx][:h,:w]
-                
-                # HR_cbcr = self.test_HR_cbcr[idx][:,:,:2]
-                # LR_cbcr = self.test_LR_cbcr[idx][:,:,:2]
 
                 HR = HR.reshape([1,h,w,c])
                 LR = LR.reshape([1,h,w,c])
@@ -226,28 +223,90 @@ class SRCNN:
                 test_psnr_mean += test_psnr
                 test_ssim_mean += test_ssim
 
-                # test_output = test_output.reshape([h,w,c])
-                # output = np.concatenate((test_output, LR_cbcr[:,:,0:1], LR_cbcr[:,:,1:2]), axis=2)
-                # output = denormalize(output)
-                # output = ycrcb2bgr(output)
+            test_loss_mean /= len(self.test_HR)
+            test_psnr_mean /= len(self.test_HR)
+            test_ssim_mean /= len(self.test_HR)
+
+            print("{} Average - test_loss: {}, test_psnr: {}, test_ssim: {}".format(dataset, test_loss_mean, test_psnr_mean, test_ssim_mean))
+            print("     Elapsed Time : %dhour %dmin %dsec" % time_calculate(time.time()- start_time))
+
+    def infer(self):
+        tf.global_variables_initializer().run()
+
+        self.saver = tf.train.Saver()
+        could_load, checkpoint_counter = self.load(self.checkpoint_dir)
+
+        if could_load:
+            print(" [*] Load SUCCESS")
+        else:
+            print(" [!] Load failed...")
+        
+        infer_datasets = ['Set5', 'Set14', 'BSDS200', 'Urban100']
+        # infer_datasets = ['Set5']
+
+        test_loss_mean = 0.
+        test_psnr_mean = 0.
+        test_ssim_mean = 0.
+        
+        for dataset in infer_datasets:
+            if dataset == 'Set5':
+                self.test_HR, self.test_LR = load_set5(scale=self.scale, with_cbcr=True)
+            if dataset == 'Set14':
+                self.test_HR, self.test_LR = load_set14(scale=self.scale, with_cbcr=True)
+            if dataset == 'BSDS200':
+                self.test_HR, self.test_LR = load_bsds200(scale=self.scale, with_cbcr=True)
+            if dataset == 'Urban100':
+                self.test_HR, self.test_LR = load_urban100(scale=self.scale, with_cbcr=True)
+
+            start_time = time.time()
+            for idx in range(len(self.test_HR)):
+                original = ycrcb2bgr(np.concatenate((self.test_HR[idx][:,:,2:],self.test_HR[idx][:,:,:2]), axis=2))
                 
-                # gt = self.test_HR_cbcr[idx] 
-                # gt = np.concatenate((gt[:,:,2:3], gt[:,:,0:2]),axis=2)
-                # gt = denormalize(gt)
-                # gt = ycrcb2bgr(gt)
+                test_HR = normalize(self.test_HR[idx][:,:,2:3]) # Y value of HR
+                test_crcb = self.test_LR[idx][:,:,0:2]          # Color value of LR
+                test_LR = normalize(self.test_LR[idx][:,:,2:3]) # Y value of LR
 
-                # ilr = self.test_LR_cbcr[idx]
-                # ilr = np.concatenate((ilr[:,:,2:3], ilr[:,:,0:2]),axis=2)
-                # ilr = denormalize(ilr)
-                # ilr = ycrcb2bgr(ilr)
+                h, w, c = test_HR.shape
+                _h, _w, _c = test_LR.shape
+                h = min(h, _h)
+                w = min(w, _w)
 
-                # print('Image' + str(idx) + '- psnr: {}, ssim: {}'.format(test_psnr, test_ssim))
-                # cv2.imshow('Infrence' + str(idx), output)
-                # cv2.imshow('GT' + str(idx), gt)
-                # cv2.imshow('ILR' + str(idx), ilr)
+                HR = test_HR[:h,:w]
+                LR = test_LR[:h,:w]
+                test_crcb = test_crcb[:h,:w]
 
-                # cv2.waitKey(0)
-                # cv2.destroyAllWindows()
+                HR = HR.reshape([1,h,w,c])
+                LR = LR.reshape([1,h,w,c])
+                test_crcb = test_crcb.reshape([1,h,w,2])
+
+                test_feed_dict = {
+                    self.test_X : LR,
+                    self.test_Y : HR
+                }
+
+                test_output, test_loss, test_psnr, test_ssim = self.sess.run([self.test_logits, self.test_loss, self.test_psnr, self.test_ssim], feed_dict=test_feed_dict)
+
+                test_output = denormalize(test_output)
+                inference_img = np.concatenate((test_output, test_crcb), axis=3)
+                inference_img = inference_img.reshape([h,w,3])
+                inference_img = ycrcb2bgr(inference_img)
+
+                if not os.path.exists(os.path.join(self.infer_dir, dataset, str(self.scale)+'x')):
+                    os.makedirs(os.path.join(self.infer_dir, dataset, str(self.scale)+'x'))
+
+                infer_path = os.path.join(self.infer_dir, dataset, str(self.scale)+'x')
+                cv2.imwrite(os.path.join(infer_path, 'SRCNN_' + str(self.scale) + 'x_' + str(idx) + '_' + str(test_psnr) + '_' + str(test_ssim) + '.png'), inference_img)
+                print("{}[{}] - test_loss: {}, test_psnr: {}, test_ssim: {}".format(dataset, idx, test_loss, test_psnr, test_ssim))
+                
+                if len(self.test_HR) <= 20:
+                    cv2.imshow('original', original)
+                    cv2.imshow('inference - {}[{}]'.format(dataset, idx), inference_img)
+                    cv2.waitKey(0)
+                    cv2.destroyAllWindows()
+
+                test_loss_mean += test_loss
+                test_psnr_mean += test_psnr
+                test_ssim_mean += test_ssim
 
             test_loss_mean /= len(self.test_HR)
             test_psnr_mean /= len(self.test_HR)
@@ -258,7 +317,7 @@ class SRCNN:
 
     @property
     def model_dir(self):
-        return "{}_{}_{}_{}".format(self.model_name, self.train_dataset, self.batch_size, self.initial_lr)
+        return "{}_{}x_{}_{}_{}".format(self.model_name, self.scale, self.train_dataset, self.batch_size, self.initial_lr)
 
     def save(self, checkpoint_dir, step):
         checkpoint_dir = os.path.join(checkpoint_dir, self.model_dir)
