@@ -20,9 +20,9 @@ end
 
 
 %% generate data
-filepaths = []
+filepaths = [];
+filepaths = [filepaths; dir(fullfile(folder, '*.bmp'))];
 filepaths = [filepaths; dir(fullfile(folder, '*.png'))];
-filepaths = [filepaths; dir(fullfile(folder, '*.jpg'))];
     
 for i = 1 : length(filepaths)
     image = imread(fullfile(folder, filepaths(i).name));
